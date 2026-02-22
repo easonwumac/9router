@@ -905,7 +905,10 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   };
 
   let transformStream;
-  const isDroidCLI = userAgent?.toLowerCase().includes('droid') || userAgent?.toLowerCase().includes('codex-cli');
+  const normalizedUserAgent = String(userAgent || "").toLowerCase();
+  const isDroidCLI = normalizedUserAgent.includes("codex-cli")
+    || normalizedUserAgent.includes("droid-cli")
+    || normalizedUserAgent.includes("droid/");
   const needsCodexTranslation = provider === 'codex'
     && targetFormat === 'openai-responses'
     && !isDroidCLI;

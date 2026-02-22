@@ -153,7 +153,7 @@ export async function handleResponsesCore({
   // Re-wrap it back to Responses SSE events for /v1/responses clients.
   if (clientRequestedStreaming && isSSE) {
     const ua = String(userAgent || "").toLowerCase();
-    const isDroidCLI = ua.includes("droid") || ua.includes("codex-cli");
+    const isDroidCLI = ua.includes("codex-cli") || ua.includes("droid-cli") || ua.includes("droid/");
     const shouldTransformToResponsesSSE = modelInfo?.provider === "codex" && !isDroidCLI;
 
     if (!shouldTransformToResponsesSSE || !response.body) {
