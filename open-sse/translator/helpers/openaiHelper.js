@@ -81,14 +81,14 @@ export function filterToOpenAIFormat(body) {
       // Already OpenAI format
       if (tool.type === "function" && tool.function) return tool;
       
-      // Claude format: {name, description, input_schema}
-      if (tool.name && (tool.input_schema || tool.description)) {
+      // Claude/Responses format: {name, description, input_schema|parameters}
+      if (tool.name && (tool.input_schema || tool.parameters || tool.description)) {
         return {
           type: "function",
           function: {
             name: tool.name,
             description: tool.description || "",
-            parameters: tool.input_schema || { type: "object", properties: {} }
+            parameters: tool.parameters || tool.input_schema || { type: "object", properties: {} }
           }
         };
       }
@@ -124,4 +124,3 @@ export function filterToOpenAIFormat(body) {
 
   return body;
 }
-
