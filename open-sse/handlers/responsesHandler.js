@@ -4,6 +4,7 @@
  */
 
 import { handleChatCore } from "./chatCore.js";
+import { createResponsesApiTransformStream } from "../transformer/responsesTransformer.js";
 import { convertResponsesStreamToJson } from "../transformer/streamToJsonConverter.js";
 
 function convertChatCompletionToResponsesJson(chat) {
@@ -148,11 +149,34 @@ export async function handleResponsesCore({
   }
 
   // Case 2: Client wants streaming, got SSE.
-  // chatCore already emits client-target format for Responses requests.
+  // For Codex (non-droid), chatCore stream is translated to Chat Completions chunks.
+  // Re-wrap it back to Responses SSE events for /v1/responses clients.
   if (clientRequestedStreaming && isSSE) {
+    const ua = String(userAgent || "").toLowerCase();
+    const isDroidCLI = ua.includes("droid") || ua.includes("codex-cli");
+    const shouldTransformToResponsesSSE = modelInfo?.provider === "codex" && !isDroidCLI;
+
+    if (!shouldTransformToResponsesSSE || !response.body) {
+      return {
+        success: true,
+        response,
+      };
+    }
+
+    const transformStream = createResponsesApiTransformStream(null);
+    const transformedBody = response.body.pipeThrough(transformStream);
+    const headers = new Headers(response.headers);
+    headers.set("Content-Type", "text/event-stream");
+    headers.set("Cache-Control", "no-cache");
+    headers.set("Connection", "keep-alive");
+    headers.set("Access-Control-Allow-Origin", "*");
+
     return {
       success: true,
-      response,
+      response: new Response(transformedBody, {
+        status: response.status || 200,
+        headers,
+      }),
     };
   }
 
