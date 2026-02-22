@@ -8,6 +8,63 @@ import { convertResponsesApiFormat } from "../translator/helpers/responsesApiHel
 import { createResponsesApiTransformStream } from "../transformer/responsesTransformer.js";
 import { convertResponsesStreamToJson } from "../transformer/streamToJsonConverter.js";
 
+function convertChatCompletionToResponsesJson(chat) {
+  if (!chat || typeof chat !== "object") return chat;
+  if (chat.object === "response") return chat;
+  if (!Array.isArray(chat.choices)) return chat;
+
+  const choice = chat.choices[0] || {};
+  const message = choice.message || {};
+  const output = [];
+  const createdAt = Number(chat.created) || Math.floor(Date.now() / 1000);
+  const responseId = chat.id ? "resp_" + chat.id : "resp_" + Date.now();
+
+  if (message.reasoning_content) {
+    output.push({
+      id: "rs_" + responseId + "_0",
+      type: "reasoning",
+      summary: [{ type: "summary_text", text: String(message.reasoning_content) }]
+    });
+  }
+
+  if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+    for (const tc of message.tool_calls) {
+      output.push({
+        id: tc.id ? "fc_" + tc.id : "fc_" + Date.now(),
+        type: "function_call",
+        arguments: tc.function?.arguments || "{}",
+        call_id: tc.id || "",
+        name: tc.function?.name || ""
+      });
+    }
+  }
+
+  const text = typeof message.content === "string"
+    ? message.content
+    : (Array.isArray(message.content) ? message.content.map((p) => p?.text || "").join("") : "");
+  output.push({
+    id: "msg_" + responseId + "_0",
+    type: "message",
+    role: "assistant",
+    content: [{ type: "output_text", annotations: [], logprobs: [], text }]
+  });
+
+  const usage = chat.usage || {};
+  return {
+    id: responseId,
+    object: "response",
+    created_at: createdAt,
+    status: "completed",
+    output,
+    usage: {
+      input_tokens: usage.prompt_tokens || 0,
+      output_tokens: usage.completion_tokens || 0,
+      total_tokens: usage.total_tokens || ((usage.prompt_tokens || 0) + (usage.completion_tokens || 0))
+    },
+    model: chat.model
+  };
+}
+
 /**
  * Handle /v1/responses request
  * @param {object} options
@@ -114,6 +171,27 @@ export async function handleResponsesCore({
     };
   }
 
-  // Case 3: Non-SSE response (error or non-streaming from provider) - return as-is
+  // Case 3: Non-SSE response. Keep Responses schema for non-stream clients.
+  if (!clientRequestedStreaming) {
+    try {
+      const body = await response.clone().json();
+      const converted = convertChatCompletionToResponsesJson(body);
+      if (converted !== body) {
+        const headers = new Headers(response.headers);
+        headers.set("Content-Type", "application/json");
+        return {
+          success: true,
+          response: new Response(JSON.stringify(converted), {
+            status: response.status,
+            headers
+          })
+        };
+      }
+    } catch {
+      // Non-JSON or unreadable payload: fall through and return as-is.
+    }
+  }
+
+  // Default: return original response unchanged.
   return result;
 }
