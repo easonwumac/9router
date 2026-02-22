@@ -42,12 +42,14 @@ function convertChatCompletionToResponsesJson(chat) {
   const text = typeof message.content === "string"
     ? message.content
     : (Array.isArray(message.content) ? message.content.map((p) => p?.text || "").join("") : "");
-  output.push({
-    id: "msg_" + responseId + "_0",
-    type: "message",
-    role: "assistant",
-    content: [{ type: "output_text", annotations: [], logprobs: [], text }]
-  });
+  if (text && text.length > 0) {
+    output.push({
+      id: "msg_" + responseId + "_0",
+      type: "message",
+      role: "assistant",
+      content: [{ type: "output_text", annotations: [], logprobs: [], text }]
+    });
+  }
 
   const usage = chat.usage || {};
   return {
