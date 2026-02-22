@@ -352,9 +352,13 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   const requestStartTime = Date.now();
 
   // Endpoint hint has higher priority for client format detection.
-  // Claude requests sent to /v1/messages should always be treated as Claude format.
+  // /v1/messages must stay Claude and /v1/responses must stay openai-responses.
   const endpoint = clientRawRequest?.endpoint || "";
-  const sourceFormat = endpoint.endsWith("/v1/messages") ? FORMATS.CLAUDE : detectFormat(body);
+  const sourceFormat = endpoint.endsWith("/v1/messages")
+    ? FORMATS.CLAUDE
+    : (endpoint.endsWith("/v1/responses") || endpoint.endsWith("/api/v1/responses"))
+      ? FORMATS.OPENAI_RESPONSES
+      : detectFormat(body);
 
   // Check for bypass patterns (warmup, skip) - return fake response
   const bypassResponse = handleBypassRequest(body, model, userAgent);
