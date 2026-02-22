@@ -4,8 +4,6 @@
  */
 
 import { handleChatCore } from "./chatCore.js";
-import { convertResponsesApiFormat } from "../translator/helpers/responsesApiHelper.js";
-import { createResponsesApiTransformStream } from "../transformer/responsesTransformer.js";
 import { convertResponsesStreamToJson } from "../transformer/streamToJsonConverter.js";
 
 function convertChatCompletionToResponsesJson(chat) {
@@ -93,19 +91,14 @@ export async function handleResponsesCore({
   userAgent,
   apiKey
 }) {
-  // Convert Responses API format to Chat Completions format
-  const convertedBody = convertResponsesApiFormat(body);
-
   // Preserve client's stream preference (matches OpenClaw behavior)
   // Default to false if omitted: Boolean(undefined) = false
-  const clientRequestedStreaming = convertedBody.stream === true;
-  if (convertedBody.stream === undefined) {
-    convertedBody.stream = false;
-  }
+  const clientRequestedStreaming = body.stream === true;
+  const requestBody = body.stream === undefined ? { ...body, stream: false } : body;
 
   // Call chat core handler
   const result = await handleChatCore({
-    body: convertedBody,
+    body: requestBody,
     modelInfo,
     credentials,
     log,
@@ -154,22 +147,12 @@ export async function handleResponsesCore({
     }
   }
 
-  // Case 2: Client wants streaming, got SSE - transform it
+  // Case 2: Client wants streaming, got SSE.
+  // chatCore already emits client-target format for Responses requests.
   if (clientRequestedStreaming && isSSE) {
-    const transformStream = createResponsesApiTransformStream(null);
-    const transformedBody = response.body.pipeThrough(transformStream);
-
     return {
       success: true,
-      response: new Response(transformedBody, {
-        status: 200,
-        headers: {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          "Connection": "keep-alive",
-          "Access-Control-Allow-Origin": "*"
-        }
-      })
+      response,
     };
   }
 

@@ -353,15 +353,10 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   // Endpoint hint has higher priority for client format detection.
   // /v1/messages must stay Claude.
-  // /v1/responses is forced to openai-responses only for non-stream requests.
   const endpoint = clientRawRequest?.endpoint || "";
-  const isResponsesEndpoint = endpoint.endsWith("/v1/responses") || endpoint.endsWith("/api/v1/responses");
-  const forceResponsesFormat = isResponsesEndpoint && body.stream === false;
   const sourceFormat = endpoint.endsWith("/v1/messages")
     ? FORMATS.CLAUDE
-    : forceResponsesFormat
-      ? FORMATS.OPENAI_RESPONSES
-      : detectFormat(body);
+    : detectFormat(body);
 
   // Check for bypass patterns (warmup, skip) - return fake response
   const bypassResponse = handleBypassRequest(body, model, userAgent);
