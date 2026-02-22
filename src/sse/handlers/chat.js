@@ -8,6 +8,7 @@ import {
 import { getSettings } from "@/lib/localDb";
 import { getModelInfo, getComboModels } from "../services/model.js";
 import { handleChatCore } from "open-sse/handlers/chatCore.js";
+import { handleResponsesCore } from "open-sse/handlers/responsesHandler.js";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
 import { handleComboChat } from "open-sse/services/combo.js";
 import { HTTP_STATUS } from "open-sse/config/constants.js";
@@ -115,6 +116,8 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
 
   // Extract userAgent from request
   const userAgent = request?.headers?.get("user-agent") || "";
+  const endpoint = String(clientRawRequest?.endpoint || "");
+  const isResponsesApiEndpoint = endpoint.endsWith("/v1/responses") || endpoint.endsWith("/api/v1/responses");
 
   // Try with available accounts (fallback on errors)
   let excludeConnectionId = null;
@@ -156,8 +159,9 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       }
     }
 
-    // Use shared chatCore
-    const result = await handleChatCore({
+    // Route /v1/responses through the dedicated responses handler.
+    const coreHandler = isResponsesApiEndpoint ? handleResponsesCore : handleChatCore;
+    const result = await coreHandler({
       body: { ...body, model: `${provider}/${model}` },
       modelInfo: { provider, model },
       credentials: refreshedCredentials,

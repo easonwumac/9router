@@ -8,6 +8,65 @@ import { convertResponsesApiFormat } from "../translator/helpers/responsesApiHel
 import { createResponsesApiTransformStream } from "../transformer/responsesTransformer.js";
 import { convertResponsesStreamToJson } from "../transformer/streamToJsonConverter.js";
 
+function convertChatCompletionToResponsesJson(chat) {
+  if (!chat || typeof chat !== "object") return chat;
+  if (chat.object === "response") return chat;
+  if (!Array.isArray(chat.choices)) return chat;
+
+  const choice = chat.choices[0] || {};
+  const message = choice.message || {};
+  const output = [];
+  const createdAt = Number(chat.created) || Math.floor(Date.now() / 1000);
+  const responseId = chat.id ? "resp_" + chat.id : "resp_" + Date.now();
+
+  if (message.reasoning_content) {
+    output.push({
+      id: "rs_" + responseId + "_0",
+      type: "reasoning",
+      summary: [{ type: "summary_text", text: String(message.reasoning_content) }]
+    });
+  }
+
+  if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+    for (const tc of message.tool_calls) {
+      output.push({
+        id: tc.id ? "fc_" + tc.id : "fc_" + Date.now(),
+        type: "function_call",
+        arguments: tc.function?.arguments || "{}",
+        call_id: tc.id || "",
+        name: tc.function?.name || ""
+      });
+    }
+  }
+
+  const text = typeof message.content === "string"
+    ? message.content
+    : (Array.isArray(message.content) ? message.content.map((p) => p?.text || "").join("") : "");
+  if (text && text.length > 0) {
+    output.push({
+      id: "msg_" + responseId + "_0",
+      type: "message",
+      role: "assistant",
+      content: [{ type: "output_text", annotations: [], logprobs: [], text }]
+    });
+  }
+
+  const usage = chat.usage || {};
+  return {
+    id: responseId,
+    object: "response",
+    created_at: createdAt,
+    status: "completed",
+    output,
+    usage: {
+      input_tokens: usage.prompt_tokens || 0,
+      output_tokens: usage.completion_tokens || 0,
+      total_tokens: usage.total_tokens || ((usage.prompt_tokens || 0) + (usage.completion_tokens || 0))
+    },
+    model: chat.model
+  };
+}
+
 /**
  * Handle /v1/responses request
  * @param {object} options
@@ -21,27 +80,44 @@ import { convertResponsesStreamToJson } from "../transformer/streamToJsonConvert
  * @param {string} options.connectionId - Connection ID for usage tracking
  * @returns {Promise<{success: boolean, response?: Response, status?: number, error?: string}>}
  */
-export async function handleResponsesCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, connectionId }) {
-  // Convert Responses API format to Chat Completions format
-  const convertedBody = convertResponsesApiFormat(body);
-
+export async function handleResponsesCore({
+  body,
+  modelInfo,
+  credentials,
+  log,
+  onCredentialsRefreshed,
+  onRequestSuccess,
+  onDisconnect,
+  connectionId,
+  clientRawRequest,
+  userAgent,
+  apiKey
+}) {
   // Preserve client's stream preference (matches OpenClaw behavior)
   // Default to false if omitted: Boolean(undefined) = false
-  const clientRequestedStreaming = convertedBody.stream === true;
-  if (convertedBody.stream === undefined) {
-    convertedBody.stream = false;
-  }
+  const clientRequestedStreaming = body.stream === true;
+  const normalizedBody = body.stream === undefined ? { ...body, stream: false } : body;
+
+  // OpenAI non-stream path in chatCore expects chat-completions source format
+  // for SSE-to-JSON conversion; keep Responses format for other providers/flows.
+  const shouldConvertToChatFormat = modelInfo?.provider === "openai" && !clientRequestedStreaming;
+  const requestBody = shouldConvertToChatFormat
+    ? convertResponsesApiFormat(normalizedBody)
+    : normalizedBody;
 
   // Call chat core handler
   const result = await handleChatCore({
-    body: convertedBody,
+    body: requestBody,
     modelInfo,
     credentials,
     log,
     onCredentialsRefreshed,
     onRequestSuccess,
     onDisconnect,
-    connectionId
+    connectionId,
+    clientRawRequest,
+    userAgent,
+    apiKey
   });
 
   if (!result.success || !result.response) {
@@ -50,9 +126,12 @@ export async function handleResponsesCore({ body, modelInfo, credentials, log, o
 
   const response = result.response;
   const contentType = response.headers.get("Content-Type") || "";
+  const isSSE =
+    contentType.includes("text/event-stream") ||
+    (contentType === "" && modelInfo?.provider === "codex");
 
   // Case 1: Client wants non-streaming, but got SSE (provider forced it, e.g., Codex)
-  if (!clientRequestedStreaming && contentType.includes("text/event-stream")) {
+  if (!clientRequestedStreaming && isSSE) {
     try {
       const jsonResponse = await convertResponsesStreamToJson(response.body);
 
@@ -77,26 +156,59 @@ export async function handleResponsesCore({ body, modelInfo, credentials, log, o
     }
   }
 
-  // Case 2: Client wants streaming, got SSE - transform it
-  if (clientRequestedStreaming && contentType.includes("text/event-stream")) {
+  // Case 2: Client wants streaming, got SSE.
+  // For Codex (non-droid), chatCore stream is translated to Chat Completions chunks.
+  // Re-wrap it back to Responses SSE events for /v1/responses clients.
+  if (clientRequestedStreaming && isSSE) {
+    const ua = String(userAgent || "").toLowerCase();
+    const isDroidCLI = ua.includes("codex-cli") || ua.includes("droid-cli") || ua.includes("droid/");
+    const shouldTransformToResponsesSSE = modelInfo?.provider === "codex" && !isDroidCLI;
+
+    if (!shouldTransformToResponsesSSE || !response.body) {
+      return {
+        success: true,
+        response,
+      };
+    }
+
     const transformStream = createResponsesApiTransformStream(null);
     const transformedBody = response.body.pipeThrough(transformStream);
+    const headers = new Headers(response.headers);
+    headers.set("Content-Type", "text/event-stream");
+    headers.set("Cache-Control", "no-cache");
+    headers.set("Connection", "keep-alive");
+    headers.set("Access-Control-Allow-Origin", "*");
 
     return {
       success: true,
       response: new Response(transformedBody, {
-        status: 200,
-        headers: {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          "Connection": "keep-alive",
-          "Access-Control-Allow-Origin": "*"
-        }
-      })
+        status: response.status || 200,
+        headers,
+      }),
     };
   }
 
-  // Case 3: Non-SSE response (error or non-streaming from provider) - return as-is
+  // Case 3: Non-SSE response. Keep Responses schema for non-stream clients.
+  if (!clientRequestedStreaming) {
+    try {
+      const body = await response.clone().json();
+      const converted = convertChatCompletionToResponsesJson(body);
+      if (converted !== body) {
+        const headers = new Headers(response.headers);
+        headers.set("Content-Type", "application/json");
+        return {
+          success: true,
+          response: new Response(JSON.stringify(converted), {
+            status: response.status,
+            headers
+          })
+        };
+      }
+    } catch {
+      // Non-JSON or unreadable payload: fall through and return as-is.
+    }
+  }
+
+  // Default: return original response unchanged.
   return result;
 }
-

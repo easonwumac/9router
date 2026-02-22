@@ -351,7 +351,12 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   const { provider, model } = modelInfo;
   const requestStartTime = Date.now();
 
-  const sourceFormat = detectFormat(body);
+  // Endpoint hint has higher priority for client format detection.
+  // /v1/messages must stay Claude.
+  const endpoint = clientRawRequest?.endpoint || "";
+  const sourceFormat = endpoint.endsWith("/v1/messages")
+    ? FORMATS.CLAUDE
+    : detectFormat(body);
 
   // Check for bypass patterns (warmup, skip) - return fake response
   const bypassResponse = handleBypassRequest(body, model, userAgent);
@@ -900,7 +905,10 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   };
 
   let transformStream;
-  const isDroidCLI = userAgent?.toLowerCase().includes('droid') || userAgent?.toLowerCase().includes('codex-cli');
+  const normalizedUserAgent = String(userAgent || "").toLowerCase();
+  const isDroidCLI = normalizedUserAgent.includes("codex-cli")
+    || normalizedUserAgent.includes("droid-cli")
+    || normalizedUserAgent.includes("droid/");
   const needsCodexTranslation = provider === 'codex'
     && targetFormat === 'openai-responses'
     && !isDroidCLI;
