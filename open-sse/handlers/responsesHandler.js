@@ -21,7 +21,19 @@ import { convertResponsesStreamToJson } from "../transformer/streamToJsonConvert
  * @param {string} options.connectionId - Connection ID for usage tracking
  * @returns {Promise<{success: boolean, response?: Response, status?: number, error?: string}>}
  */
-export async function handleResponsesCore({ body, modelInfo, credentials, log, onCredentialsRefreshed, onRequestSuccess, onDisconnect, connectionId }) {
+export async function handleResponsesCore({
+  body,
+  modelInfo,
+  credentials,
+  log,
+  onCredentialsRefreshed,
+  onRequestSuccess,
+  onDisconnect,
+  connectionId,
+  clientRawRequest,
+  userAgent,
+  apiKey
+}) {
   // Convert Responses API format to Chat Completions format
   const convertedBody = convertResponsesApiFormat(body);
 
@@ -41,7 +53,10 @@ export async function handleResponsesCore({ body, modelInfo, credentials, log, o
     onCredentialsRefreshed,
     onRequestSuccess,
     onDisconnect,
-    connectionId
+    connectionId,
+    clientRawRequest,
+    userAgent,
+    apiKey
   });
 
   if (!result.success || !result.response) {
@@ -50,9 +65,12 @@ export async function handleResponsesCore({ body, modelInfo, credentials, log, o
 
   const response = result.response;
   const contentType = response.headers.get("Content-Type") || "";
+  const isSSE =
+    contentType.includes("text/event-stream") ||
+    (contentType === "" && modelInfo?.provider === "codex");
 
   // Case 1: Client wants non-streaming, but got SSE (provider forced it, e.g., Codex)
-  if (!clientRequestedStreaming && contentType.includes("text/event-stream")) {
+  if (!clientRequestedStreaming && isSSE) {
     try {
       const jsonResponse = await convertResponsesStreamToJson(response.body);
 
@@ -78,7 +96,7 @@ export async function handleResponsesCore({ body, modelInfo, credentials, log, o
   }
 
   // Case 2: Client wants streaming, got SSE - transform it
-  if (clientRequestedStreaming && contentType.includes("text/event-stream")) {
+  if (clientRequestedStreaming && isSSE) {
     const transformStream = createResponsesApiTransformStream(null);
     const transformedBody = response.body.pipeThrough(transformStream);
 
@@ -99,4 +117,3 @@ export async function handleResponsesCore({ body, modelInfo, credentials, log, o
   // Case 3: Non-SSE response (error or non-streaming from provider) - return as-is
   return result;
 }
-
