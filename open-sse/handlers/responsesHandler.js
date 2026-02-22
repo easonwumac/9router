@@ -4,6 +4,7 @@
  */
 
 import { handleChatCore } from "./chatCore.js";
+import { convertResponsesApiFormat } from "../translator/helpers/responsesApiHelper.js";
 import { createResponsesApiTransformStream } from "../transformer/responsesTransformer.js";
 import { convertResponsesStreamToJson } from "../transformer/streamToJsonConverter.js";
 
@@ -95,7 +96,14 @@ export async function handleResponsesCore({
   // Preserve client's stream preference (matches OpenClaw behavior)
   // Default to false if omitted: Boolean(undefined) = false
   const clientRequestedStreaming = body.stream === true;
-  const requestBody = body.stream === undefined ? { ...body, stream: false } : body;
+  const normalizedBody = body.stream === undefined ? { ...body, stream: false } : body;
+
+  // OpenAI non-stream path in chatCore expects chat-completions source format
+  // for SSE-to-JSON conversion; keep Responses format for other providers/flows.
+  const shouldConvertToChatFormat = modelInfo?.provider === "openai" && !clientRequestedStreaming;
+  const requestBody = shouldConvertToChatFormat
+    ? convertResponsesApiFormat(normalizedBody)
+    : normalizedBody;
 
   // Call chat core handler
   const result = await handleChatCore({
